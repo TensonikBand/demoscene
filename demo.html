@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MEGA DEMO SCENE GENERATOR</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #000;
+            overflow: hidden;
+            cursor: none;
+            font-family: monospace;
+        }
+        
+        canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            image-rendering: optimizeSpeed;
+        }
+        
+        #startButton {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 30px 60px;
+            font-family: monospace;
+            font-size: 24px;
+            background: linear-gradient(45deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f);
+            border: none;
+            color: #000;
+            font-weight: bold;
+            letter-spacing: 4px;
+            cursor: pointer;
+            z-index: 1000;
+            animation: rainbow-bg 0.5s linear infinite;
+            text-shadow: 2px 2px 0 #fff;
+        }
+        
+        @keyframes rainbow-bg {
+            0% { filter: hue-rotate(0deg); }
+            100% { filter: hue-rotate(360deg); }
+        }
+        
+        #startButton:hover {
+            transform: translate(-50%, -50%) scale(1.2);
+        }
+        
+        #seedInfo {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: #0f0;
+            font-size: 14px;
+            z-index: 1000;
+            text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+            display: none;
+            line-height: 1.5;
+        }
+        
+        #recordIndicator {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px 20px;
+            font-family: monospace;
+            font-size: 14px;
+            background: #f00;
+            border: 2px solid #fff;
+            color: #fff;
+            font-weight: bold;
+            z-index: 1000;
+            display: none;
+            animation: rec-pulse 1s infinite;
+        }
+        
+        @keyframes rec-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <button id="startButton">GENERATE DEMO</button>
+    <div id="seedInfo"></div>
+    <div id="recordIndicator">● RECORDING</div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+    <script>
+        // Press ESC to stop demo manually
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && isPlaying) {
+                console.log('Manual stop triggered by ESC key');
+                stopDemo();
+            }
+        });
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const SEED = parseInt(urlParams.get('seed')) || Math.floor(Math.random() * 2147483647);
+        const DURATION = parseInt(urlParams.get('duration')) || 300; // 5 minutes default
+        
+        // Display seed info
+        document.getElementById('seedInfo').innerHTML = `SEED: ${SEED}<br>DURATION: ${DURATION}s<br>REMAINING: <span id="elapsedTime">${Math.floor(DURATION/60)}:${(DURATION%60).toString().padStart(2, '0')}</span>`;
+        
+        // Seeded random number generator (Mulberry32)
+        class SeededRandom {
+            constructor(seed) {
+                this.seed = seed;
+            }
+            
+            random() {
+                let t = this.seed += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+            
+            range(min, max) {
+                return Math.floor(this.random() * (max - min + 1)) + min;
+            }
+            
+            choice(array) {
+                return array[this.range(0, array.length - 1)];
+            }
+            
+            shuffle(array) {
+                const arr = [...array];
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = this.range(0, i);
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+                return arr;
+            }
+        }
+        
+        const rng = new SeededRandom(SEED);
+        
+        // Music theory helpers
+        const SCALES = {
+            major: [0, 2, 4, 5, 7, 9, 11],
+            minor: [0, 2, 3, 5, 7, 8, 10],
+            dorian: [0, 2, 3, 5, 7, 9, 10],
+            phrygian: [0, 1, 3, 5, 7, 8, 10],
+            lydian: [0, 2, 4, 6, 7, 9, 11],
+            mixolydian: [0, 2, 4, 5, 7, 9, 10],
+            locrian: [0, 1, 3, 5, 6, 8, 10],
+            pentatonic: [0, 2, 4, 7, 9],
+            blues: [0, 3, 5, 6, 7, 10],
+            chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        };
+        
+        const KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        const CHORD_PROGRESSIONS = [
+            [1, 5, 6, 4], // I-V-vi-IV
+            [1, 4, 5, 1], // I-IV-V-I
+            [1, 6, 4, 5], // I-vi-IV-V
+            [2, 5, 1, 1], // ii-V-I-I
+            [1, 3, 4, 5], // I-iii-IV-V
+            [6, 4, 1, 5], // vi-IV-I-V
+            [1, 7, 4, 1], // I-VII-IV-I
+            [1, 5, 6, 3, 4], // I-V-vi-iii-IV
+        ];
+        
+        // Scene types
+        const SCENE_TYPES = [
+            'matrix', 'tunnel', 'plasma', 'starfield', 'fractals', 'particles', 
+            'geometry', 'waves', 'spiral', 'glitch', 'fire', 'electric'
+        ];
+        
+        // Generate music parameters from seed
+        class MusicGenerator {
+            constructor(seed, duration) {
+                this.rng = new SeededRandom(seed);
+                this.duration = duration;
+                this.bpm = this.rng.range(120, 160);
+                this.key = this.rng.choice(KEYS);
+                this.scale = this.rng.choice(Object.keys(SCALES));
+                this.progression = this.rng.choice(CHORD_PROGRESSIONS);
+                this.totalBars = Math.floor((duration * this.bpm) / (60 * 4));
+                
+                // Track used scenes to prevent repeats
+                this.availableScenes = [...SCENE_TYPES];
+                this.usedScenes = [];
+                
+                // Generate song structure
+                this.sections = this.generateSections();
+            }
+            
+            getNextScene() {
+                // If all scenes have been used, reset the available pool
+                if (this.availableScenes.length === 0) {
+                    this.availableScenes = [...SCENE_TYPES];
+                    this.usedScenes = [];
+                }
+                
+                // Pick a random scene from available ones
+                const sceneIndex = this.rng.range(0, this.availableScenes.length - 1);
+                const scene = this.availableScenes[sceneIndex];
+                
+                // Move it to used scenes
+                this.availableScenes.splice(sceneIndex, 1);
+                this.usedScenes.push(scene);
+                
+                return scene;
+            }
+            
+            generateSections() {
+                const sections = [];
+                const sectionCount = this.rng.range(6, 10);
+                const barsPerSection = Math.floor(this.totalBars / sectionCount);
+                
+                for (let i = 0; i < sectionCount; i++) {
+                    sections.push({
+                        start: i * barsPerSection,
+                        end: (i + 1) * barsPerSection,
+                        type: this.rng.choice(['intro', 'buildup', 'drop', 'breakdown', 'bridge', 'outro']),
+                        intensity: this.rng.random(),
+                        scene: this.getNextScene(), // Use the new method
+                        melody: this.generateMelodyPattern(),
+                        bass: this.generateBassPattern(),
+                        drums: this.generateDrumPattern(),
+                        arp: this.generateArpPattern()
+                    });
+                }
+                
+                return sections;
+            }
+            
+            noteToFreq(note) {
+                const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+                const octave = parseInt(note.slice(-1));
+                const noteName = note.slice(0, -1);
+                const noteIndex = noteNames.indexOf(noteName);
+                const keyIndex = KEYS.indexOf(this.key);
+                
+                // Apply scale
+                const scaleIntervals = SCALES[this.scale];
+                const scaleDegree = this.rng.choice(scaleIntervals);
+                
+                const finalNote = (keyIndex + noteIndex + scaleDegree) % 12;
+                return noteNames[finalNote] + octave;
+            }
+            
+            generateMelodyPattern() {
+                const pattern = [];
+                const length = this.rng.range(4, 16);
+                for (let i = 0; i < length; i++) {
+                    pattern.push({
+                        note: this.rng.choice(['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5']),
+                        duration: this.rng.choice(['16n', '8n', '4n']),
+                        probability: this.rng.random()
+                    });
+                }
+                return pattern;
+            }
+            
+            generateBassPattern() {
+                const pattern = [];
+                const length = this.rng.range(4, 8);
+                for (let i = 0; i < length; i++) {
+                    pattern.push({
+                        note: this.rng.choice(['C2', 'D2', 'E2', 'F2', 'G2', 'A2', 'B2', 'C3']),
+                        duration: this.rng.choice(['8n', '4n', '2n']),
+                        probability: this.rng.random()
+                    });
+                }
+                return pattern;
+            }
+            
+            generateDrumPattern() {
+                return {
+                    kick: Array(16).fill(0).map(() => this.rng.random() > 0.6),
+                    snare: Array(16).fill(0).map(() => this.rng.random() > 0.7),
+                    hihat: Array(16).fill(0).map(() => this.rng.random() > 0.4)
+                };
+            }
+            
+            generateArpPattern() {
+                const pattern = [];
+                const length = this.rng.range(3, 8);
+                for (let i = 0; i < length; i++) {
+                    pattern.push({
+                        note: this.rng.choice(['C3', 'E3', 'G3', 'C4', 'E4', 'G4', 'C5']),
+                        speed: this.rng.choice(['32n', '16n', '8n'])
+                    });
+                }
+                return pattern;
+            }
+        }
+        
+        // Visual generator
+        class VisualGenerator {
+            constructor(seed, ctx, canvas) {
+                this.rng = new SeededRandom(seed + 1000); // Different seed for visuals
+                this.ctx = ctx;
+                this.canvas = canvas;
+                this.frameCount = 0;
+                
+                // Generate color palette
+                this.palette = this.generatePalette();
+                this.sceneParams = {};
+            }
+            
+            generatePalette() {
+                const baseHue = this.rng.range(0, 360);
+                return {
+                    primary: `hsl(${baseHue}, 100%, 50%)`,
+                    secondary: `hsl(${(baseHue + 120) % 360}, 100%, 50%)`,
+                    tertiary: `hsl(${(baseHue + 240) % 360}, 100%, 50%)`,
+                    accent: `hsl(${(baseHue + 60) % 360}, 100%, 50%)`,
+                    background: `hsl(${baseHue}, 20%, 10%)`
+                };
+            }
+            
+            renderScene(sceneType, intensity) {
+                this.frameCount++;
+                
+                switch(sceneType) {
+                    case 'matrix':
+                        this.renderMatrix(intensity);
+                        break;
+                    case 'tunnel':
+                        this.renderTunnel(intensity);
+                        break;
+                    case 'plasma':
+                        this.renderPlasma(intensity);
+                        break;
+                    case 'starfield':
+                        this.renderStarfield(intensity);
+                        break;
+                    case 'fractals':
+                        this.renderFractals(intensity);
+                        break;
+                    case 'particles':
+                        this.renderParticles(intensity);
+                        break;
+                    case 'geometry':
+                        this.renderGeometry(intensity);
+                        break;
+                    case 'waves':
+                        this.renderWaves(intensity);
+                        break;
+                    case 'spiral':
+                        this.renderSpiral(intensity);
+                        break;
+                    case 'glitch':
+                        this.renderGlitch(intensity);
+                        break;
+                    case 'fire':
+                        this.renderFire(intensity);
+                        break;
+                    case 'electric':
+                        this.renderElectric(intensity);
+                        break;
+                }
+            }
+            
+            renderMatrix(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.ctx.fillStyle = this.palette.primary;
+                this.ctx.font = `${14 + intensity * 10}px monospace`;
+                
+                for (let x = 0; x < this.canvas.width; x += 20) {
+                    const char = String.fromCharCode(this.rng.range(33, 126));
+                    const y = (this.frameCount * (2 + intensity * 3) + x) % this.canvas.height;
+                    this.ctx.fillText(char, x, y);
+                }
+            }
+            
+            renderTunnel(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.ctx.save();
+                this.ctx.translate(this.canvas.width / 2, this.canvas.height / 2);
+                
+                for (let i = 0; i < 20; i++) {
+                    const depth = i + this.frameCount / (20 - intensity * 10);
+                    const size = 800 / (depth % 20 + 1);
+                    const rotation = depth * 0.1;
+                    
+                    this.ctx.strokeStyle = this.palette.secondary;
+                    this.ctx.lineWidth = 2;
+                    this.ctx.save();
+                    this.ctx.rotate(rotation);
+                    this.ctx.strokeRect(-size/2, -size/2, size, size);
+                    this.ctx.restore();
+                }
+                this.ctx.restore();
+            }
+            
+            renderPlasma(intensity) {
+                const imageData = this.ctx.createImageData(this.canvas.width / 4, this.canvas.height / 4);
+                const data = imageData.data;
+                const time = this.frameCount * 0.02;
+                
+                for (let x = 0; x < this.canvas.width / 4; x++) {
+                    for (let y = 0; y < this.canvas.height / 4; y++) {
+                        const value = Math.sin(x / (10 - intensity * 5) + time) + 
+                                     Math.sin(y / (10 - intensity * 5) + time * 1.5) +
+                                     Math.sin((x + y) / (15 - intensity * 7) + time * 2);
+                        
+                        const color = Math.floor((value + 3) * 85);
+                        const index = (y * this.canvas.width / 4 + x) * 4;
+                        
+                        data[index] = color;
+                        data[index + 1] = 255 - color;
+                        data[index + 2] = Math.abs(color - 128) * 2;
+                        data[index + 3] = 255;
+                    }
+                }
+                
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = this.canvas.width / 4;
+                tempCanvas.height = this.canvas.height / 4;
+                tempCanvas.getContext('2d').putImageData(imageData, 0, 0);
+                
+                this.ctx.drawImage(tempCanvas, 0, 0, this.canvas.width, this.canvas.height);
+            }
+            
+            renderStarfield(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                if (!this.sceneParams.stars) {
+                    this.sceneParams.stars = [];
+                    for (let i = 0; i < 200; i++) {
+                        this.sceneParams.stars.push({
+                            x: this.rng.random() * this.canvas.width,
+                            y: this.rng.random() * this.canvas.height,
+                            z: this.rng.random() * 1000,
+                            speed: this.rng.random() * 10 + 1
+                        });
+                    }
+                }
+                
+                this.sceneParams.stars.forEach(star => {
+                    star.z -= star.speed * (1 + intensity * 2);
+                    if (star.z <= 0) {
+                        star.x = this.rng.random() * this.canvas.width;
+                        star.y = this.rng.random() * this.canvas.height;
+                        star.z = 1000;
+                    }
+                    
+                    const x = (star.x - this.canvas.width / 2) * (1000 / star.z) + this.canvas.width / 2;
+                    const y = (star.y - this.canvas.height / 2) * (1000 / star.z) + this.canvas.height / 2;
+                    const size = (1 - star.z / 1000) * 5 * intensity;
+                    
+                    this.ctx.fillStyle = this.palette.accent;
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, size, 0, Math.PI * 2);
+                    this.ctx.fill();
+                });
+            }
+            
+            renderFractals(intensity) {
+                // Clear background
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.ctx.save();
+                this.ctx.translate(this.canvas.width / 2, this.canvas.height / 2);
+                
+                const drawFractal = (depth, size, angle) => {
+                    if (depth <= 0 || size < 1) return;
+                    
+                    this.ctx.strokeStyle = `hsl(${(this.frameCount + depth * 30) % 360}, 100%, 50%)`;
+                    this.ctx.lineWidth = depth / 2;
+                    
+                    this.ctx.save();
+                    this.ctx.rotate(angle + this.frameCount * 0.01);
+                    
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, -size);
+                    this.ctx.lineTo(size * 0.866, size * 0.5);
+                    this.ctx.lineTo(-size * 0.866, size * 0.5);
+                    this.ctx.closePath();
+                    this.ctx.stroke();
+                    
+                    drawFractal(depth - 1, size * 0.5, angle + Math.PI / 3);
+                    drawFractal(depth - 1, size * 0.5, angle - Math.PI / 3);
+                    
+                    this.ctx.restore();
+                };
+                
+                // Scale fractal to fill screen
+                const baseSize = Math.min(this.canvas.width, this.canvas.height) * 0.4;
+                drawFractal(5 + intensity * 3, baseSize + intensity * baseSize, 0);
+                this.ctx.restore();
+            }
+            
+            renderParticles(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                if (!this.sceneParams.particles) {
+                    this.sceneParams.particles = [];
+                    for (let i = 0; i < 150; i++) {
+                        this.sceneParams.particles.push({
+                            x: this.rng.random() * this.canvas.width,
+                            y: this.rng.random() * this.canvas.height,
+                            vx: (this.rng.random() - 0.5) * 20,
+                            vy: (this.rng.random() - 0.5) * 20,
+                            life: 100 + this.rng.random() * 100,
+                            maxLife: 200,
+                            color: this.rng.choice([this.palette.primary, this.palette.secondary, this.palette.accent])
+                        });
+                    }
+                }
+                
+                this.sceneParams.particles.forEach(p => {
+                    p.x += p.vx * intensity;
+                    p.y += p.vy * intensity;
+                    p.life--;
+                    
+                    // Wrap around screen edges instead of resetting to center
+                    if (p.x < 0) p.x = this.canvas.width;
+                    if (p.x > this.canvas.width) p.x = 0;
+                    if (p.y < 0) p.y = this.canvas.height;
+                    if (p.y > this.canvas.height) p.y = 0;
+                    
+                    if (p.life <= 0) {
+                        // Respawn at random position
+                        p.x = this.rng.random() * this.canvas.width;
+                        p.y = this.rng.random() * this.canvas.height;
+                        p.vx = (this.rng.random() - 0.5) * 20;
+                        p.vy = (this.rng.random() - 0.5) * 20;
+                        p.life = p.maxLife;
+                    }
+                    
+                    // Particle glow effect
+                    const alpha = p.life / p.maxLife;
+                    this.ctx.shadowBlur = 10 * alpha;
+                    this.ctx.shadowColor = p.color;
+                    this.ctx.fillStyle = p.color.replace('50%', `${50 + alpha * 50}%`);
+                    this.ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+                    this.ctx.shadowBlur = 0;
+                });
+            }
+            
+            renderGeometry(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.ctx.save();
+                this.ctx.translate(this.canvas.width / 2, this.canvas.height / 2);
+                
+                const sides = 3 + Math.floor(intensity * 5);
+                // Scale to fill screen
+                const maxRadius = Math.min(this.canvas.width, this.canvas.height) * 0.45;
+                const radius = maxRadius * (0.3 + intensity * 0.7);
+                
+                for (let j = 0; j < 5; j++) {
+                    this.ctx.rotate(this.frameCount * 0.01 * (j + 1));
+                    this.ctx.strokeStyle = `hsla(${(this.frameCount + j * 60) % 360}, 100%, 50%, ${1 - j * 0.2})`;
+                    this.ctx.lineWidth = 3 - j * 0.5;
+                    
+                    this.ctx.beginPath();
+                    for (let i = 0; i <= sides; i++) {
+                        const angle = (i / sides) * Math.PI * 2;
+                        const x = Math.cos(angle) * radius * (1 + j * 0.2);
+                        const y = Math.sin(angle) * radius * (1 + j * 0.2);
+                        if (i === 0) this.ctx.moveTo(x, y);
+                        else this.ctx.lineTo(x, y);
+                    }
+                    this.ctx.closePath();
+                    this.ctx.stroke();
+                }
+                
+                this.ctx.restore();
+            }
+            
+            renderWaves(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 20, 40, 0.1)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.ctx.strokeStyle = this.palette.secondary;
+                this.ctx.lineWidth = 2;
+                
+                for (let y = 0; y < this.canvas.height; y += 10) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, y);
+                    for (let x = 0; x < this.canvas.width; x += 10) {
+                        const offset = Math.sin((x / 50) + (this.frameCount / 10) + (y / 30)) * 20 * intensity;
+                        this.ctx.lineTo(x, y + offset);
+                    }
+                    this.ctx.stroke();
+                }
+            }
+            
+            renderSpiral(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                this.ctx.save();
+                this.ctx.translate(this.canvas.width / 2, this.canvas.height / 2);
+                this.ctx.rotate(this.frameCount / 50);
+                
+                // Scale spiral to fill screen
+                const maxRadius = Math.sqrt(Math.pow(this.canvas.width/2, 2) + Math.pow(this.canvas.height/2, 2));
+                const spiralTurns = maxRadius / 10;
+                
+                for (let i = 0; i < spiralTurns * intensity; i++) {
+                    const angle = i * 0.1 + this.frameCount / 50;
+                    const radius = i * 10;
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    
+                    // Stop when we reach edge of screen
+                    if (radius > maxRadius) break;
+                    
+                    this.ctx.fillStyle = `hsl(${i * 2 + this.frameCount}, 100%, 50%)`;
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, 5 + i / 20, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+                this.ctx.restore();
+            }
+            
+            renderGlitch(intensity) {
+                if (this.frameCount % Math.floor(10 - intensity * 8) === 0) {
+                    const sliceHeight = 10;
+                    for (let y = 0; y < this.canvas.height; y += sliceHeight) {
+                        const offset = (this.rng.random() - 0.5) * 50 * intensity;
+                        this.ctx.drawImage(this.canvas, 
+                            0, y, this.canvas.width, sliceHeight,
+                            offset, y, this.canvas.width, sliceHeight
+                        );
+                    }
+                }
+                
+                if (this.rng.random() < intensity * 0.1) {
+                    const x = this.rng.random() * this.canvas.width;
+                    const y = this.rng.random() * this.canvas.height;
+                    const w = this.rng.random() * 200;
+                    const h = this.rng.random() * 100;
+                    this.ctx.fillStyle = this.rng.choice([this.palette.primary, '#fff', '#000']);
+                    this.ctx.fillRect(x, y, w, h);
+                }
+            }
+            
+            renderFire(intensity) {
+                this.ctx.fillStyle = 'rgba(50, 0, 0, 0.2)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Fire particles across full width
+                const particleCount = Math.floor((this.canvas.width / 50) * intensity);
+                
+                for (let i = 0; i < particleCount; i++) {
+                    const x = (i / particleCount) * this.canvas.width + 
+                              Math.sin(this.frameCount / 20 + i) * 30;
+                    const baseY = this.canvas.height;
+                    const riseHeight = this.canvas.height * 0.8 * intensity;
+                    const y = baseY - Math.abs(Math.sin(this.frameCount / 30 + i * 0.5)) * riseHeight;
+                    const radius = 15 + Math.sin(this.frameCount / 10 + i) * 10;
+                    
+                    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, radius);
+                    gradient.addColorStop(0, '#fff');
+                    gradient.addColorStop(0.3, '#ff0');
+                    gradient.addColorStop(0.6, '#f80');
+                    gradient.addColorStop(1, '#f00');
+                    this.ctx.fillStyle = gradient;
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+                
+                // Add flame tongues
+                for (let i = 0; i < 5; i++) {
+                    const x = this.rng.random() * this.canvas.width;
+                    const height = this.rng.random() * this.canvas.height * 0.6 * intensity;
+                    
+                    const gradient = this.ctx.createLinearGradient(x, this.canvas.height, x, this.canvas.height - height);
+                    gradient.addColorStop(0, 'rgba(255, 0, 0, 0.8)');
+                    gradient.addColorStop(0.5, 'rgba(255, 128, 0, 0.5)');
+                    gradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
+                    
+                    this.ctx.fillStyle = gradient;
+                    this.ctx.fillRect(x - 20, this.canvas.height - height, 40, height);
+                }
+            }
+            
+            renderElectric(intensity) {
+                this.ctx.fillStyle = 'rgba(0, 0, 20, 0.1)';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Background electric field
+                if (this.frameCount % 5 === 0) {
+                    const gridSize = 50;
+                    for (let x = 0; x < this.canvas.width; x += gridSize) {
+                        for (let y = 0; y < this.canvas.height; y += gridSize) {
+                            if (this.rng.random() < intensity * 0.1) {
+                                this.ctx.strokeStyle = `rgba(0, 255, 255, ${intensity * 0.2})`;
+                                this.ctx.lineWidth = 1;
+                                this.ctx.beginPath();
+                                this.ctx.moveTo(x, y);
+                                this.ctx.lineTo(x + gridSize, y + gridSize);
+                                this.ctx.stroke();
+                            }
+                        }
+                    }
+                }
+                
+                // Main lightning bolts
+                if (this.frameCount % Math.floor(20 - intensity * 15) === 0) {
+                    this.ctx.strokeStyle = '#0ff';
+                    this.ctx.lineWidth = 2 + intensity * 3;
+                    this.ctx.shadowBlur = 20;
+                    this.ctx.shadowColor = '#0ff';
+                    
+                    // Vertical lightning
+                    this.ctx.beginPath();
+                    const startX = this.rng.random() * this.canvas.width;
+                    this.ctx.moveTo(startX, 0);
+                    
+                    let y = 0;
+                    let x = startX;
+                    while (y < this.canvas.height) {
+                        y += 10 + this.rng.random() * 20;
+                        x += (this.rng.random() - 0.5) * 100 * intensity;
+                        this.ctx.lineTo(x, y);
+                        
+                        // Branch occasionally
+                        if (this.rng.random() < 0.3 * intensity) {
+                            const branchX = x + (this.rng.random() - 0.5) * 100;
+                            const branchY = y + this.rng.random() * 50;
+                            this.ctx.moveTo(x, y);
+                            this.ctx.lineTo(branchX, branchY);
+                            this.ctx.moveTo(x, y);
+                        }
+                    }
+                    this.ctx.stroke();
+                    
+                    // Horizontal lightning occasionally
+                    if (this.rng.random() < 0.3) {
+                        this.ctx.beginPath();
+                        const startY = this.rng.random() * this.canvas.height;
+                        this.ctx.moveTo(0, startY);
+                        
+                        let hx = 0;
+                        let hy = startY;
+                        while (hx < this.canvas.width) {
+                            hx += 20 + this.rng.random() * 30;
+                            hy += (this.rng.random() - 0.5) * 50 * intensity;
+                            this.ctx.lineTo(hx, hy);
+                        }
+                        this.ctx.stroke();
+                    }
+                    
+                    this.ctx.shadowBlur = 0;
+                }
+                
+                // Electric sparks across screen
+                for (let i = 0; i < intensity * 10; i++) {
+                    const sparkX = this.rng.random() * this.canvas.width;
+                    const sparkY = this.rng.random() * this.canvas.height;
+                    const sparkSize = this.rng.random() * 3;
+                    
+                    this.ctx.fillStyle = '#0ff';
+                    this.ctx.beginPath();
+                    this.ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+            }
+        }
+        
+        // Global variables
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        const musicGen = new MusicGenerator(SEED, DURATION);
+        const visualGen = new VisualGenerator(SEED, ctx, canvas);
+        
+        let isPlaying = false;
+        let currentBar = 0;
+        let frameCount = 0;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+        let audioDestination = null;
+        let instruments = {};
+        let loops = {};
+        let startTime = 0;
+        
+        // Update timer function
+        function updateTimer() {
+            if (startTime > 0) {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const remaining = Math.max(0, DURATION - elapsed);
+                const minutes = Math.floor(remaining / 60);
+                const seconds = remaining % 60;
+                const elapsedElement = document.getElementById('elapsedTime');
+                if (elapsedElement) {
+                    elapsedElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                }
+            }
+        }
+        
+        // Global stop function
+        window.stopDemo = function() {
+            console.log('stopDemo called, isPlaying:', isPlaying, 'isRecording:', isRecording);
+            
+            // Stop audio
+            isPlaying = false;
+            if (Tone.Transport.state === 'started') {
+                Tone.Transport.stop();
+                Tone.Transport.cancel();
+            }
+            if (loops.main) {
+                try {
+                    loops.main.stop();
+                    loops.main.dispose();
+                } catch (e) {
+                    console.log('Error stopping loop:', e);
+                }
+            }
+            
+            // Stop and save recording
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                console.log('Stopping MediaRecorder, current state:', mediaRecorder.state);
+                
+                // Ensure we have collected data
+                if (recordedChunks.length === 0 && mediaRecorder.state === 'recording') {
+                    mediaRecorder.requestData();
+                }
+                
+                // Small delay then stop
+                setTimeout(() => {
+                    if (mediaRecorder.state === 'recording') {
+                        try {
+                            mediaRecorder.stop();
+                            console.log('MediaRecorder stopped');
+                        } catch (e) {
+                            console.error('Error stopping MediaRecorder:', e);
+                            document.getElementById('recordIndicator').style.display = 'none';
+                        }
+                    } else {
+                        document.getElementById('recordIndicator').style.display = 'none';
+                    }
+                }, 200);
+            } else {
+                console.log('MediaRecorder not active');
+                document.getElementById('recordIndicator').style.display = 'none';
+            }
+            
+            isRecording = false;
+        };
+        
+        async function initAudio() {
+            await Tone.start();
+            
+            Tone.Transport.bpm.value = musicGen.bpm;
+            audioDestination = Tone.context.createMediaStreamDestination();
+            
+            const masterGain = new Tone.Gain(0.5).toDestination();
+            const recordingGain = new Tone.Gain(0.5).connect(audioDestination);
+            
+            const distortion = new Tone.Distortion(0.3).connect(masterGain);
+            distortion.connect(recordingGain);
+            
+            const chorus = new Tone.Chorus(4, 2.5, 0.5).connect(distortion);
+            const delay = new Tone.FeedbackDelay("8n", 0.3).connect(chorus);
+            delay.wet.value = 0.2;
+            
+            // Create instruments
+            instruments.pulse1 = new Tone.MonoSynth({
+                oscillator: { type: "square" },
+                envelope: { attack: 0.001, decay: 0.01, sustain: 1, release: 0.01 }
+            }).connect(delay);
+            instruments.pulse1.volume.value = -8;
+            
+            instruments.pulse2 = new Tone.MonoSynth({
+                oscillator: { type: "pulse", width: 0.25 },
+                envelope: { attack: 0.001, decay: 0.001, sustain: 0.8, release: 0.001 }
+            }).connect(chorus);
+            instruments.pulse2.volume.value = -10;
+            
+            instruments.pulse3 = new Tone.MonoSynth({
+                oscillator: { type: "sawtooth" },
+                envelope: { attack: 0.001, decay: 0.001, sustain: 0.9, release: 0.001 }
+            }).connect(distortion);
+            instruments.pulse3.volume.value = -12;
+            
+            instruments.bass = new Tone.MonoSynth({
+                oscillator: { type: "triangle" },
+                envelope: { attack: 0.001, decay: 0.001, sustain: 1, release: 0.001 }
+            }).connect(masterGain).connect(recordingGain);
+            instruments.bass.volume.value = -2;
+            
+            instruments.kick = new Tone.MembraneSynth().connect(masterGain).connect(recordingGain);
+            instruments.kick.volume.value = -2;
+            
+            instruments.snare = new Tone.NoiseSynth({
+                noise: { type: "white" },
+                envelope: { attack: 0.001, decay: 0.03, sustain: 0 }
+            }).connect(masterGain).connect(recordingGain);
+            instruments.snare.volume.value = -6;
+            
+            instruments.hihat = new Tone.MetalSynth().connect(masterGain).connect(recordingGain);
+            instruments.hihat.volume.value = -15;
+            
+            createSequence();
+        }
+        
+        function createSequence() {
+            let noteIndex = 0;
+            let arpIndex = 0;
+            
+            loops.main = new Tone.Loop((time) => {
+                const position = Tone.Transport.position.split(':');
+                currentBar = parseInt(position[0]);
+                const beat = parseInt(position[1]);
+                const sixteenth = parseInt(position[2]);
+                const pos = currentBar * 16 + beat * 4 + sixteenth;
+                
+                // Find current section
+                const section = musicGen.sections.find(s => currentBar >= s.start && currentBar < s.end);
+                if (!section) return;
+                
+                // Play melody
+                if (section.melody && rng.random() < section.intensity) {
+                    const melodyNote = section.melody[noteIndex % section.melody.length];
+                    if (rng.random() < melodyNote.probability) {
+                        const note = musicGen.noteToFreq(melodyNote.note);
+                        instruments.pulse1.triggerAttackRelease(note, melodyNote.duration, time);
+                    }
+                    noteIndex++;
+                }
+                
+                // Play bass
+                if (section.bass && pos % 4 === 0) {
+                    const bassNote = section.bass[(pos / 4) % section.bass.length];
+                    if (rng.random() < bassNote.probability) {
+                        const note = musicGen.noteToFreq(bassNote.note);
+                        instruments.bass.triggerAttackRelease(note, bassNote.duration, time);
+                    }
+                }
+                
+                // Play arps
+                if (section.arp && section.intensity > 0.3) {
+                    const arpNote = section.arp[arpIndex % section.arp.length];
+                    const note = musicGen.noteToFreq(arpNote.note);
+                    instruments.pulse3.triggerAttackRelease(note, arpNote.speed, time);
+                    arpIndex++;
+                }
+                
+                // Play drums
+                if (section.drums) {
+                    const stepIndex = pos % 16;
+                    if (section.drums.kick[stepIndex]) {
+                        instruments.kick.triggerAttackRelease("C1", "8n", time);
+                    }
+                    if (section.drums.snare[stepIndex]) {
+                        instruments.snare.triggerAttackRelease("8n", time);
+                    }
+                    if (section.drums.hihat[stepIndex]) {
+                        instruments.hihat.triggerAttackRelease("C4", "32n", time);
+                    }
+                }
+                
+                // Harmony
+                if (section.intensity > 0.5 && pos % 8 === 0) {
+                    const harmonyNote = rng.choice(['E4', 'G4', 'B4', 'D5']);
+                    const note = musicGen.noteToFreq(harmonyNote);
+                    instruments.pulse2.triggerAttackRelease(note, "4n", time);
+                }
+                
+                // Stop at end
+                if (currentBar >= musicGen.totalBars) {
+                    console.log('Demo reached end at bar', currentBar, 'of', musicGen.totalBars);
+                    stopDemo();
+                }
+                
+            }, "16n");
+        }
+        
+        // Render loop
+        function render() {
+            frameCount++;
+            
+            // Update timer
+            updateTimer();
+            
+            // Find current section
+            const section = musicGen.sections.find(s => currentBar >= s.start && currentBar < s.end);
+            if (section) {
+                visualGen.renderScene(section.scene, section.intensity);
+            }
+            
+            if (isPlaying) {
+                requestAnimationFrame(render);
+            } else {
+                // Clean up when stopped
+                console.log('Render loop stopped');
+            }
+        }
+        
+        // Video recording
+        function setupVideoRecording() {
+            try {
+                const videoStream = canvas.captureStream(30);
+                const audioStream = audioDestination.stream;
+                const combinedStream = new MediaStream();
+                
+                videoStream.getVideoTracks().forEach(track => {
+                    combinedStream.addTrack(track);
+                    console.log('Added video track');
+                });
+                audioStream.getAudioTracks().forEach(track => {
+                    combinedStream.addTrack(track);
+                    console.log('Added audio track');
+                });
+                
+                const options = {
+                    mimeType: 'video/webm',
+                    videoBitsPerSecond: 8000000
+                };
+                
+                // Try different mime types
+                const mimeTypes = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+                for (const mimeType of mimeTypes) {
+                    if (MediaRecorder.isTypeSupported(mimeType)) {
+                        options.mimeType = mimeType;
+                        console.log('Using mimeType:', mimeType);
+                        break;
+                    }
+                }
+                
+                mediaRecorder = new MediaRecorder(combinedStream, options);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    console.log('Data available, size:', event.data?.size);
+                    if (event.data && event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    console.log('MediaRecorder stopped event, chunks:', recordedChunks.length);
+                    document.getElementById('recordIndicator').style.display = 'none';
+                    
+                    if (recordedChunks.length === 0) {
+                        console.error('No recorded data available');
+                        alert('Recording failed - no data captured. Try refreshing the page.');
+                        return;
+                    }
+                    
+                    try {
+                        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                        console.log('Created blob, size:', blob.size);
+                        
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `demoscene_seed${SEED}_${Date.now()}.webm`;
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        
+                        setTimeout(() => {
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                        }, 1000);
+                        
+                        console.log('Video download triggered');
+                        recordedChunks = [];
+                    } catch (e) {
+                        console.error('Error saving video:', e);
+                        alert('Error saving video: ' + e.message);
+                    }
+                };
+                
+                mediaRecorder.onerror = (event) => {
+                    console.error('MediaRecorder error:', event.error);
+                    document.getElementById('recordIndicator').style.display = 'none';
+                    alert('Recording error: ' + (event.error?.message || 'Unknown error'));
+                };
+                
+                mediaRecorder.onstart = () => {
+                    console.log('MediaRecorder started');
+                };
+                
+                console.log('MediaRecorder setup complete');
+            } catch (e) {
+                console.error('Error setting up MediaRecorder:', e);
+                alert('Failed to setup recording: ' + e.message);
+            }
+        }
+        
+        // Start button
+        document.getElementById('startButton').addEventListener('click', async () => {
+            document.getElementById('startButton').style.display = 'none';
+            document.getElementById('seedInfo').style.display = 'block';
+            
+            console.log('Initializing demo with seed:', SEED, 'duration:', DURATION);
+            
+            // Set start time for timer
+            startTime = Date.now();
+            
+            await initAudio();
+            setupVideoRecording();
+            
+            // Start recording with a small delay to ensure everything is ready
+            setTimeout(() => {
+                mediaRecorder.start(100); // Record in 100ms chunks
+                isRecording = true;
+                document.getElementById('recordIndicator').style.display = 'block';
+                console.log('Recording started');
+            }, 100);
+            
+            isPlaying = true;
+            loops.main.start(0);
+            Tone.Transport.start();
+            render();
+            
+            // Fallback timer to stop recording if the demo doesn't stop naturally
+            setTimeout(() => {
+                if (isRecording) {
+                    console.log('Fallback stop triggered');
+                    stopDemo();
+                }
+            }, (DURATION + 5) * 1000); // Add 5 seconds buffer
+        });
+        
+        // Function to stop everything, hit ESC if panic is setting in
+        function stopDemo() {
+            console.log('Stopping demo...');
+            
+            // Stop audio
+            if (loops.main) {
+                loops.main.stop();
+                loops.main.dispose();
+            }
+            Tone.Transport.stop();
+            Tone.Transport.cancel();
+            isPlaying = false;
+            
+            // Stop recording
+            if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
+                console.log('Stopping recording, state:', mediaRecorder.state);
+                isRecording = false;
+                
+                // Request data before stopping
+                if (mediaRecorder.state === 'recording') {
+                    mediaRecorder.requestData();
+                    
+                    // Give it a moment to collect the final data
+                    setTimeout(() => {
+                        if (mediaRecorder.state === 'recording') {
+                            mediaRecorder.stop();
+                        }
+                    }, 500);
+                }
+            } else {
+                console.log('Recording already stopped or not active');
+                document.getElementById('recordIndicator').style.display = 'none';
+            }
+        }
+        
+        // Handle resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>
